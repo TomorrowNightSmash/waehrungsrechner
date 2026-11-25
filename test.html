@@ -1,0 +1,8 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>PostMessage-Test</title><link rel="stylesheet" href="style.css"></head><body><main><p><a href="index.html">← Währungsrechner</a></p><h1>PostMessage-Test</h1><p>Die Elternseite sendet ein Währungspaar an den eingebetteten Rechner. Die Antwort erscheint unten als JSON.</p><section class="panel"><form id="test"><label>Von<select id="from"></select></label><label>Nach<select id="to"></select></label><label>Zeitraum<select id="period"><option>7</option><option selected>30</option><option>90</option></select></label><button>Anfrage senden</button></form><pre id="log" aria-live="polite">Warte auf Anfrage …</pre></section><iframe id="conv" title="Währungsrechner" src="index.html"></iframe></main><script type="module">
+import {currencies} from './rates.js';
+const $=id=>document.getElementById(id), frame=$('conv');
+for(const id of ['from','to']) for(const code of currencies) $(id).add(new Option(code,code));$('from').value='EUR';$('to').value='USD';
+let counter=0;
+$('test').addEventListener('submit',e=>{e.preventDefault();const requestId=++counter;const message={type:'getFxRates',requestId,payload:{from:$('from').value,to:$('to').value,period:Number($('period').value)}};$('log').textContent='Anfrage: '+JSON.stringify(message,null,2);frame.contentWindow.postMessage(message,location.origin);});
+window.addEventListener('message',e=>{if(e.origin!==location.origin||e.source!==frame.contentWindow||!['fxData','fxError'].includes(e.data?.type)||e.data.requestId!==counter)return;$('log').textContent=JSON.stringify(e.data,null,2);});
+</script></body></html>

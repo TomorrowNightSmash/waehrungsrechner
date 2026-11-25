@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <title>Währungsrechner & Kombinierter FX-Chart</title>
+  <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+  <style>
+    body { font-family: Arial, sans-serif; margin:0; padding:20px; background:#fafafa; display:flex; flex-direction:column; align-items:center; }
+    .flex { display:flex; flex-wrap:wrap; gap:10px; justify-content:center; width:100%; max-width:800px; margin-bottom:20px; }
+    select,input,button { padding:8px; font-size:14px; border:1px solid #ccc; border-radius:4px; }
+    button { background:#00bfa5; color:#fff; border:none; cursor:pointer; }
+    button:hover { background:#019d87; }
+    #pmLog,#chart { width:90%; max-width:1000px; margin-bottom:20px; }
+    #pmLog { background:#222; color:#0f0; padding:10px; font-family:monospace; max-height:120px; overflow:auto; white-space:pre-wrap; border:1px solid #555; }
+  </style>
+</head>
+<body>
+
+  <h2>💬 PostMessage-Log</h2>
+  <div id="pmLog">Warte auf Anfragen…</div>
+
+  <h2>💱 Live-Währungsrechner</h2>
+  <div class="flex">
+    <select id="select-from"></select>
+    <input id="betrag" type="number" placeholder="Betrag" />
+    <select id="select-to"></select>
+    <button onclick="calculate()">Umrechnen</button>
+    <span id="currency-result"></span>
+  </div>
+
+  <h2>⏳ Historische Kerzen</h2>
+  <div class="flex">
+    <label for="periodSelect">Zeitraum:</label>
+    <select id="periodSelect">
+      <option value="7">Letzte 7 Tage</option>
+      <option value="30" selected>Letzte 30 Tage</option>
+    </select>
+    <button onclick="loadHistorical()">Neu laden</button>
+  </div>
+
+  <h2>📈 Kombinierter FX-Candlestick-Chart</h2>
+  <div class="flex">
+    <label for="timeframe-select">Live-Intervall:</label>
+    <select id="timeframe-select">
+      <option value="30">30 Sekunden</option>
+      <option value="600">10 Minuten</option>
+      <option value="1800">30 Minuten</option>
+      <option value="3600">1 Stunde</option>
+      <option value="86400">1 Tag</option>
+    </select>
+  </div>
+  <div id="chart"></div>
+
+<script>
+  // === API-URLs & Keys ===
+  const FREE_URL   = 'https://api.freecurrencyapi.com/v1/latest?apikey=REDACTED';
+  const TWELVE_URL = 'https://api.twelvedata.com/time_series';
+  const TWELVE_KEY = 'REDACTED';
+
+  // === Zustand ===
+  let responseHistory = [], historicalCandles = [], isInit = false;
+
+  // === Logging ===
+  const pmLog = document.getElementById('pmLog');
+  function logPM(msg) {
+    pmLog.textContent += `\n[${new Date().toLocaleTimeString()}] ${msg}`;
+    pmLog.scrollTop = pmLog.scrollHeight;
+  }
+
+  // === Helper für Rate-Berechnung ===
+  function getRate(pair, rates) {
+    const [b,q] = pair.split('/');
+    return rates[b] && rates[q] ? rates[q]/rates[b] : null;
+  }
+
+  // === Dropdowns initialisieren ===
+  async function init() {
+    const res = await fetch(FREE_URL);
+    const { data } = await res.json();
+    const codes = Object.keys(data).sort();
+    ['select-from','select-to'].forEach(id => {
+      const sel = document.getElementById(id);
+      sel.innerHTML = '';
+      codes.forEach(c => sel.add(new Option(c,c)));
+    });
+    document.getElementById('select-from').value = 'EUR';
+    document.getElementById('select-to').value   = 'USD';
+    isInit = true;
+    await loadHistorical();
+    await fetchRates();
+  }
+
+  // === Live-Daten holen ===
+  async function fetchRates() {
+    const res = await fetch(FREE_URL);
+    const { data } = await res.json();
+    responseHistory.push({ timestamp: Date.now(), rates: data });
+    updateChart();
+    return data;
+  }
+
+  // === Umrechnung ===
+  function calculate() {
+    if (!responseHistory.length) return;
+    const from = document.getElementById('select-from').value;
+    const to   = document.getElementById('select-to').value;
+    const amt  = parseFloat(document.getElementById('betrag').value);
+    const latest = responseHistory.at(-1).rates;
+    if (isNaN(amt) || !latest[from] || !latest[to]) {
+      document.getElementById('currency-result').innerText = 'Ungültige Eingabe';
+      return;
+    }
+    document.getElementById('currency-result').innerText =
+      `= ${(amt/latest[from]*latest[to]).toFixed(4)} ${to}`;
+  }
+
+  // === Historische Kerzen laden (bis gestern) ===
+  async function loadHistorical() {
+    const from = document.getElementById('select-from').value;
+    const to   = document.getElementById('select-to').value;
+    const days = parseInt(document.getElementById('periodSelect').value,10);
+    const url  = `${TWELVE_URL}` +
+      `?symbol=${from}/${to}` +
+      `&interval=1day` +
+      `&outputsize=${days}` +
+      `&apikey=${TWELVE_KEY}`;
+    logPM(`Fetch Hist: ${url}`);
+    try {
+      const res  = await fetch(url);
+      const json = await res.json();
+      // Mappe Werte in Candles
+      let arr = (json.values||[]).reverse().map(v => ({
+        x: new Date(v.datetime).getTime(),
+        y: [ +v.open, +v.high, +v.low, +v.close ]
+      }));
+      // Filter: nur bis gestern (Tag beginnt um 00:00)
+      const today0 = new Date(); today0.setHours(0,0,0,0);
+      const t0 = today0.getTime();
+      historicalCandles = arr.filter(c => c.x < t0);
+      updateChart();
+      return historicalCandles;
+    } catch(e) {
+      console.error('Hist-Error:', e);
+    }
+  }
+
+  // === Chart Setup ===
+  const chart = new ApexCharts(document.querySelector('#chart'), {
+    series:[{ data: [] }],
+    chart:{ type:'candlestick', height:350, animations:{enabled:false} },
+    title:{ text:'FX Candlestick (hist.+live)', align:'left' },
+    xaxis:{ type:'datetime', labels:{ datetimeUTC:false } },
+    plotOptions:{ candlestick:{
+      colors:{upward:'#00B746',downward:'#EF403C'},
+      wick:{useFillColor:true}, candleWidth:6
+    } }
+  });
+  chart.render();
+
+  // === Chart Aktualisierung ===
+  function updateChart() {
+    if (!isInit) return;
+    const pair = `${document.getElementById('select-from').value}/` +
+                 document.getElementById('select-to').value;
+    const tf   = parseInt(document.getElementById('timeframe-select').value,10);
+
+    // Erstelle Live-Candles nur für heute
+    let prev = historicalCandles.length
+      ? historicalCandles[historicalCandles.length-1].y[3]
+      : null;
+    const liveCandles = responseHistory.map(e => {
+      const t = Math.floor(e.timestamp/(tf*1000))*(tf*1000);
+      const r = getRate(pair,e.rates);
+      if (r==null) return null;
+      // nur in heutige Kerze packen, d.h. t >= startOfToday
+      const today0 = new Date(); today0.setHours(0,0,0,0);
+      if (t < today0.getTime()) return null;
+      const open  = prev!==null ? prev : r;
+      const close = r;
+      const high  = Math.max(open,close);
+      const low   = Math.min(open,close);
+      prev = close;
+      return { x:t, y:[open,high,low,close] };
+    }).filter(c=>c);
+
+    // Kombiniere historisch + live-heute
+    chart.updateSeries([{ data: historicalCandles.concat(liveCandles) }]);
+    chart.updateOptions({ title:{ text:`${pair} – ${tf}s (hist+live)` } });
+  }
+
+  // === PostMessage-Listener ===
+  window.addEventListener('message', async (event) => {
+    const { type, payload } = event.data || {};
+    if (type === 'getFxRates') {
+      logPM('Empfangen ← getFxRates');
+      if (payload?.from) document.getElementById('select-from').value = payload.from;
+      if (payload?.to)   document.getElementById('select-to')  .value = payload.to;
+      const hist = await loadHistorical();
+      const live = await fetchRates();
+      window.parent.postMessage({
+        type: 'fxData',
+        payload: {
+          timestamp: Date.now(),
+          rates: live,
+          history: hist
+        }
+      }, '*');
+      logPM(`Gesendet ➤ fxData (${Object.keys(live).length} Raten, ${hist?.length||0} Kerzen)`);
+    }
+    if (type === 'setCurrency') {
+      logPM(`Empfangen ← setCurrency ${JSON.stringify(payload)}`);
+      if (payload.from) document.getElementById('select-from').value = payload.from;
+      if (payload.to)   document.getElementById('select-to')  .value = payload.to;
+      await loadHistorical();
+      await fetchRates();
+    }
+  });
+
+  // === Init & Interval ===
+  init();
+  setInterval(fetchRates, 120000); // alle 2 Minuten
+</script>
+
+</body>
+</html>

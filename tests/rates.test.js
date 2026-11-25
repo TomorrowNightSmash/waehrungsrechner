@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {convert,validPair,startDate,sampleRates,getFxRates} from '../rates.js';
+test('Umrechnung und Eingabeprüfung',()=>{assert.equal(convert(100,1.2),120);assert.equal(convert(0,1),0);assert.throws(()=>convert(-1,1));assert.throws(()=>convert(1,0));assert.throws(()=>convert(NaN,1));});
+test('Währungspaare und Zeiträume',()=>{assert.equal(validPair('EUR','USD',30),true);assert.equal(validPair('XXX','USD',30),false);assert.equal(validPair('EUR','USD',5),false);assert.equal(startDate(7,new Date('2025-03-02T12:00:00Z')),'2025-02-24');});
+test('Beispielmodus klar gekennzeichnet',()=>{const d=sampleRates('EUR','USD',30);assert.equal(d.sample,true);assert.equal(d.history.length,30);assert.equal(d.rate,d.history.at(-1).rate);assert.equal(sampleRates('EUR','EUR',7).rate,1);});
+test('Identische Währung braucht keinen Netzwerkabruf',async()=>{const r=await getFxRates('EUR','EUR',7);assert.equal(r.rate,1);assert.equal(r.date,null);});
+test('REST-Antwort mit simuliertem Netzwerk',async t=>{const mock=t.mock.method(globalThis,'fetch',async url=>{assert.equal(url.searchParams.get('providers'),'ecb');assert.equal(url.searchParams.get('base'),'EUR');assert.equal(url.searchParams.get('quotes'),'USD');return {ok:true,json:async()=>[{date:'2025-01-03',base:'EUR',quote:'USD',rate:1.1},{date:'2025-01-02',base:'EUR',quote:'USD',rate:1.09}]};});const d=await getFxRates('EUR','USD',7);assert.equal(mock.mock.callCount(),2);assert.equal(d.rate,1.1);assert.equal(d.history[0].date,'2025-01-02');});
+test('HTTP-Fehler und leere API-Antwort',async t=>{t.mock.method(globalThis,'fetch',async()=>({ok:false,status:429}));await assert.rejects(getFxRates('EUR','USD',7),/429/);globalThis.fetch=async()=>({ok:true,json:async()=>[]});await assert.rejects(getFxRates('EUR','USD',7),/Kein aktueller/);});
